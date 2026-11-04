@@ -394,6 +394,7 @@ table.dt tr.sectionHeader.clr-gray td{background:#cdd3dc;}
       <span class="counter c-issued">Выдано: <b id="cntIssued">0</b></span>
       <span class="counter c-repair">На ремонте: <b id="cntRepair">0</b></span>
       <span class="counter" id="storageBadge">💾 Локально</span>
+      <button type="button" class="counter hidden" id="btnCloudSettings" style="cursor:pointer;">⚙️ Настройки облака</button>
     </div>
 
     <div class="searchbar">
@@ -3216,6 +3217,7 @@ function openCloudInfoModal(){
   var c = CLOUD_CONFIG;
   var html = '<h3>☁️ Настройка облака (GitHub)</h3>' +
     '<p style="font-size:12.5px;color:var(--ink-muted);margin-top:0;">Данные шифруются AES-256 и хранятся файлом в вашем репозитории. Настройки сохраняются только на этом устройстве. Ключ AES должен быть одинаковым на всех устройствах — сохраните его в надёжном месте.</p>' +
+    '<div class="field"><label>Режим сейчас</label><input type="text" value="'+(state.storageMode==="cloud"?"Онлайн (GitHub)":"Локально")+'" readonly></div>' +
     '<div class="field"><label>Репозиторий (логин/имя)</label><input type="text" id="cfgRepo" placeholder="ivanov/tools-data" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(c.repo)+'"></div>' +
     '<div class="field"><label>Ветка</label><input type="text" id="cfgBranch" autocomplete="off" autocapitalize="off" value="'+escapeHtml(c.branch)+'"></div>' +
     '<div class="field"><label>Файл в репозитории</label><input type="text" id="cfgPath" autocomplete="off" autocapitalize="off" value="'+escapeHtml(c.filePath)+'"></div>' +
@@ -4245,8 +4247,16 @@ document.addEventListener("click", function(e){
     cb.checked = state.selected.has(cb.getAttribute("data-id"));
   });
 });
+var overlayDownTarget = null;
+document.getElementById("modalOverlay").addEventListener("pointerdown", function(e){
+  overlayDownTarget = e.target;
+});
 document.getElementById("modalOverlay").addEventListener("click", function(e){
-  if(e.target.id==="modalOverlay") closeModal();
+  // close only if the press AND the release both happened on the dark backdrop
+  // (selecting text and releasing outside the window must not close it)
+  var startedOnBackdrop = (overlayDownTarget === null) || (overlayDownTarget.id === "modalOverlay");
+  overlayDownTarget = null;
+  if(e.target.id==="modalOverlay" && startedOnBackdrop) closeModal();
 });
 document.getElementById("searchInput").addEventListener("input", function(e){
   state.search = e.target.value;
@@ -4257,8 +4267,10 @@ document.getElementById("editSwitch").addEventListener("click", function(){
   this.classList.toggle("on", state.editMode);
   document.getElementById("btnGroups").classList.toggle("hidden", !state.editMode);
   document.getElementById("tabGroups").classList.toggle("hidden", !state.editMode);
+  document.getElementById("btnCloudSettings").classList.toggle("hidden", !state.editMode);
   renderAll();
 });
+document.getElementById("btnCloudSettings").addEventListener("click", openCloudInfoModal);
 
 /* topbar / tabbar wiring */
 document.getElementById("btnOpenWelcome").addEventListener("click", openFile);
