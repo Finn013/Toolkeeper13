@@ -354,17 +354,12 @@ table.dt tr.sectionHeader.clr-gray td{background:#cdd3dc;}
   <div class="welcome" id="welcomeScreen">
     <div class="welcome-card">
       <h1>Toolkeeper 13</h1>
-      <p>Офлайн-приложение для выдачи и возврата инструмента. Данные хранятся в файле data.json рядом с этой программой.</p>
-      <div class="storageToggle" id="storageToggle">
-        <button type="button" class="stOption active" data-mode="local">💾 Локально</button>
-        <button type="button" class="stOption" data-mode="cloud">☁️ Онлайн (GitHub)</button>
-        <button type="button" class="stGear" id="cloudSettingsBtn" title="Настройка облака">⚙️</button>
-      </div>
-      <div class="cloudWarn hidden" id="cloudWarn">⚠️ Токен и ключ хранятся только на этом устройстве (⚙️). Репозиторий для данных делайте приватным.</div>
+      <p>Офлайн-приложение для учёта выдачи и возврата. Данные хранятся в файле data.json или онлайн (GitHub).</p>
       <div class="welcome-actions">
-        <button class="btn btn-primary" id="btnOpenWelcome">📂 Открыть базу (data.json)</button>
-        <button class="btn btn-outline" id="btnNewWelcome">✚ Создать новую базу</button>
+        <button class="btn btn-primary" id="btnOpenWelcome">📂 Открыть базу</button>
+        <button class="btn btn-outline" id="cloudSettingsBtn">⚙️ Настройки</button>
       </div>
+      <div class="cloudWarn" id="modeHint" style="color:var(--ink-muted);text-align:center;"></div>
       <div class="draft-banner hidden" id="draftBanner">
         Найден несохранённый черновик от <span id="draftTime"></span>.
         <div class="row">
@@ -387,14 +382,15 @@ table.dt tr.sectionHeader.clr-gray td{background:#cdd3dc;}
         Редактирование
         <span class="switch" id="editSwitch"></span>
       </label>
+      <button class="btn btn-outline" id="btnExit" title="Выйти">🚪<span class="desktopOnly"> Выйти</span></button>
     </header>
 
     <div class="counters">
       <span class="counter c-stock">В наличии: <b id="cntStock">0</b></span>
       <span class="counter c-issued">Выдано: <b id="cntIssued">0</b></span>
-      <span class="counter c-repair">На ремонте: <b id="cntRepair">0</b></span>
+      <span class="counter c-repair">Отложено: <b id="cntRepair">0</b></span>
       <span class="counter" id="storageBadge">💾 Локально</span>
-      <button type="button" class="counter hidden" id="btnCloudSettings" style="cursor:pointer;">⚙️ Настройки облака</button>
+      <button type="button" class="counter hidden" id="btnCloudSettings" style="cursor:pointer;">⚙️ Настройки</button>
     </div>
 
     <div class="searchbar">
@@ -403,7 +399,7 @@ table.dt tr.sectionHeader.clr-gray td{background:#cdd3dc;}
 
     <div class="content">
       <section class="panel" data-view="stock" id="panelStock">
-        <h2>В наличии <span class="tag">выдать / на ремонт</span></h2>
+        <h2>В наличии <span class="tag">выдать / отложить</span></h2>
         <div class="tablewrap" id="stockTableWrap"></div>
       </section>
       <section class="panel" data-view="issued" id="panelIssued">
@@ -426,6 +422,20 @@ table.dt tr.sectionHeader.clr-gray td{background:#cdd3dc;}
 
   <div class="modalOverlay hidden" id="modalOverlay">
     <div class="modalBox" id="modalBox"></div>
+  </div>
+  <div class="modalOverlay hidden" id="confirmOverlay" style="z-index:70;">
+    <div class="modalBox" id="confirmBox" style="max-width:420px;"></div>
+  </div>
+  <div class="modalOverlay hidden" id="lockScreen" style="z-index:75;background:#eef1f4;">
+    <div class="modalBox" style="max-width:360px;text-align:center;">
+      <div style="font-size:40px;">🔒</div>
+      <h3 style="margin:6px 0 12px;">Toolkeeper 13</h3>
+      <div class="field"><input type="password" id="lockPw" placeholder="Пароль" autocomplete="current-password"></div>
+      <div class="modalActions" style="justify-content:center;">
+        <button class="btn btn-outline" id="lockCancel">Отмена</button>
+        <button class="btn btn-primary" id="lockGo">Войти</button>
+      </div>
+    </div>
   </div>
 
   <input type="file" id="fileInputFallback" accept="application/json,.json" class="hidden">
@@ -2947,7 +2957,7 @@ function markDirty(){
 var scheduleDraftSave = debounce(function(){
   try{
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
-      sections: state.sections, groups: state.groups, tools: state.tools, ts: Date.now()
+      sections: state.sections, groups: state.groups, tools: state.tools, lock: state.lock||undefined, ts: Date.now()
     }));
   }catch(e){ /* storage full or unavailable - ignore, it's only a backup */ }
 }, 700);
@@ -2969,6 +2979,8 @@ function defaultData(){
   };
 }
 function loadDataFromObject(data){
+  state.lock = (data && data.lock && data.lock.hash) ? data.lock : null;
+  state.unlocked = !state.lock;
   state.sections = Array.isArray(data.sections) ? data.sections : [];
   state.groups = Array.isArray(data.groups) ? data.groups : [];
   state.tools = Array.isArray(data.tools) ? data.tools.map(function(t){
@@ -2993,6 +3005,8 @@ function loadDataFromObject(data){
   }
 }
 function afterFileLoaded(){
+  if(state.lock && !state.unlocked){ showLockScreen(); return; }
+  rememberMode();
   document.getElementById("welcomeScreen").classList.add("hidden");
   document.getElementById("mainApp").classList.remove("hidden");
   updateStorageBadge();
@@ -3075,7 +3089,7 @@ async function saveFile(){
   return saveLocalFile();
 }
 async function saveLocalFile(){
-  var json = JSON.stringify({sections: state.sections, groups: state.groups, tools: state.tools}, null, 2);
+  var json = JSON.stringify(currentDataObject(), null, 2);
   try{
     if(state.fileMode === "fsapi" && state.fileHandle){
       var writable = await state.fileHandle.createWritable();
@@ -3107,7 +3121,7 @@ async function saveLocalFile(){
 /* ---------------- cloud (GitHub) storage ---------------- */
 var pendingConflictRemote = null;
 function currentDataObject(){
-  return {sections: state.sections, groups: state.groups, tools: state.tools};
+  return {sections: state.sections, groups: state.groups, tools: state.tools, lock: state.lock||undefined};
 }
 function requireCloudReady(){
   if(!cloudCryptoAvailable()){
@@ -3127,9 +3141,7 @@ async function openFromCloud(){
     toast("Загрузка с GitHub…");
     var file = await ghGetFile();
     if(!file){
-      if(confirm("Файл в репозитории ещё не создан. Создать новую базу?")){
-        newDatabase();
-      }
+      uiConfirm("Файл в репозитории ещё не создан. Создать новую базу?", function(){ newDatabase(); });
       return;
     }
     var data = await decryptJSON(file.envelopeText);
@@ -3148,7 +3160,7 @@ async function saveToCloud(){
   try{
     toast("Сохранение на GitHub…");
     var remote = await ghGetFile();
-    if(remote && state.cloudSHA && remote.sha !== state.cloudSHA){
+    if(remote && remote.sha !== state.cloudSHA){
       openCloudConflictModal(remote);
       return;
     }
@@ -3215,24 +3227,40 @@ async function conflictForcePush(){
 /* ---------------- cloud settings modal (repo/token/key helper) ---------------- */
 function openCloudInfoModal(){
   var c = CLOUD_CONFIG;
-  var html = '<h3>☁️ Настройка облака (GitHub)</h3>' +
+  var open = baseIsOpen();
+  var html = '<h3>⚙️ Настройки</h3>' +
+    '<div class="field"><label>Где хранить базу</label><div class="storageToggle">' +
+    '<button type="button" class="stOption'+(state.storageMode==="local"?" active":"")+'" data-action="set-mode" data-mode="local">💾 Локально</button>' +
+    '<button type="button" class="stOption'+(state.storageMode==="cloud"?" active":"")+'" data-action="set-mode" data-mode="cloud"'+(cloudCryptoAvailable()?'':' disabled')+'>☁️ Онлайн (GitHub)</button></div>' +
+    (open?'<p style="font-size:12px;color:var(--ink-muted);margin:4px 0 0;">Смена режима меняет, куда сохраняет 💾. Данные на экране остаются.</p>':'') + '</div>' +
+    '<div class="modalActions" style="justify-content:flex-start;"><button class="btn btn-sm btn-outline" data-action="new-db">✚ Создать новую базу</button></div>' +
+    '<hr style="border:none;border-top:1px solid var(--line,#ddd);margin:14px 0 10px;">' +
+    '<h4 style="margin:0 0 8px;">☁️ Облако (GitHub)</h4>' +
+    '<p style="font-size:12px;color:var(--warn);margin:0 0 8px;">⚠️ Токен и ключ хранятся только на этом устройстве. Репозиторий для данных делайте приватным.</p>' +
     '<p style="font-size:12.5px;color:var(--ink-muted);margin-top:0;">Данные шифруются AES-256 и хранятся файлом в вашем репозитории. Настройки сохраняются только на этом устройстве. Ключ AES должен быть одинаковым на всех устройствах — сохраните его в надёжном месте.</p>' +
-    '<div class="field"><label>Режим сейчас</label><input type="text" value="'+(state.storageMode==="cloud"?"Онлайн (GitHub)":"Локально")+'" readonly></div>' +
-    '<div class="field"><label>Репозиторий (логин/имя)</label><input type="text" id="cfgRepo" placeholder="ivanov/tools-data" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(c.repo)+'"></div>' +
+    '<div class="field"><label>Репозиторий (логин/имя)</label><input type="text" id="cfgRepo" placeholder="login/my-data" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(c.repo)+'"></div>' +
     '<div class="field"><label>Ветка</label><input type="text" id="cfgBranch" autocomplete="off" autocapitalize="off" value="'+escapeHtml(c.branch)+'"></div>' +
     '<div class="field"><label>Файл в репозитории</label><input type="text" id="cfgPath" autocomplete="off" autocapitalize="off" value="'+escapeHtml(c.filePath)+'"></div>' +
     '<div class="field"><label>Токен GitHub (Contents: Read and write)</label><input type="password" id="cfgToken" autocomplete="off" placeholder="'+(c.token?"сохранён — оставьте пустым, чтобы не менять":"github_pat_…")+'"></div>' +
     '<div class="field"><label>Ключ AES-256 (base64)</label><textarea id="cfgKey" style="height:60px;" autocomplete="off" spellcheck="false">'+escapeHtml(c.aesKeyBase64)+'</textarea></div>' +
     '<div class="modalActions"><button class="btn btn-sm btn-outline" data-action="gen-aes-key">🔑 Новый ключ</button><button class="btn btn-sm btn-outline" data-action="copy-aes-key">📋 Копировать ключ</button><button class="btn btn-sm btn-ghost" data-action="clear-cloud-cfg">Очистить</button></div>' +
-    '<div class="modalActions"><button class="btn btn-outline" data-action="close-modal">Отмена</button><button class="btn btn-primary" data-action="save-cloud-cfg">Сохранить</button></div>';
+    '<div class="modalActions"><button class="btn btn-outline" data-action="close-modal">Отмена</button><button class="btn btn-primary" data-action="save-cloud-cfg">Сохранить</button></div>' +
+    (baseIsOpen() ? ('<hr style="border:none;border-top:1px solid var(--line,#ddd);margin:16px 0 10px;">' +
+    '<div class="field"><label>🔒 Пароль входа '+(state.lock?'(установлен)':'(не установлен)')+'</label>' +
+    '<p style="font-size:12px;color:var(--ink-muted);margin:2px 0 6px;">Хранится в самой базе: после сохранения его спросят на всех устройствах, которые открывают эту базу.</p>' +
+    '<input type="password" id="cfgPw" autocomplete="new-password" placeholder="Новый пароль"><input type="password" id="cfgPw2" autocomplete="new-password" placeholder="Повторите пароль" style="margin-top:6px;"></div>' +
+    '<div class="modalActions"><button class="btn btn-sm btn-primary" data-action="set-lock">'+(state.lock?'Сменить пароль':'Установить пароль')+'</button>' +
+    (state.lock?'<button class="btn btn-sm btn-ghost" data-action="remove-lock">Убрать пароль</button>':'') + '</div>') : '');
   openModal(html);
 }
 function generateAesKeyUI(){
   if(!cloudCryptoAvailable()){ toast("Web Crypto недоступен в этом браузере"); return; }
   var el = document.getElementById("cfgKey");
-  if(el.value.trim() && !confirm("Заменить текущий ключ? Данные, зашифрованные старым ключом, нельзя будет открыть.")) return;
-  el.value = bytesToBase64(window.crypto.getRandomValues(new Uint8Array(32)));
-  toast("Ключ создан — скопируйте его для других устройств");
+  var doGen=function(){
+    el.value = bytesToBase64(window.crypto.getRandomValues(new Uint8Array(32)));
+    toast("Ключ создан — скопируйте его для других устройств");
+  };
+  if(el.value.trim()) uiConfirm("Заменить текущий ключ? Данные, зашифрованные старым ключом, нельзя будет открыть.", doGen); else doGen();
 }
 function saveCloudSettingsUI(){
   var repo=document.getElementById("cfgRepo").value.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/\/+$/,"");
@@ -3250,8 +3278,104 @@ function saveCloudSettingsUI(){
   closeModal();
 }
 window.addEventListener("beforeunload", function(e){
-  if(state.dirty){ e.preventDefault(); e.returnValue=""; }
+  if(state.dirty && !state.exiting){
+    e.preventDefault(); e.returnValue="";
+    if(/Electron/i.test(navigator.userAgent)) setTimeout(requestExit, 0);
+  }
 });
+
+/* ---------------- in-app confirm (native confirm() breaks text input in Electron) ---------------- */
+function uiConfirm(msg, onYes, opts){
+  opts = opts || {};
+  var box = document.getElementById("confirmBox");
+  var btns = opts.buttons || [{label:"Отмена", cls:"btn-outline"}, {label: opts.yes || "Да", cls:"btn-primary", fn:onYes}];
+  box.innerHTML = '<p style="margin:4px 0 16px;white-space:pre-line;">'+escapeHtml(msg)+'</p><div class="modalActions" style="flex-wrap:wrap;"></div>';
+  var bar = box.querySelector(".modalActions");
+  btns.forEach(function(b){
+    var el = document.createElement("button");
+    el.className = "btn "+(b.cls||"btn-outline"); el.textContent = b.label;
+    el.addEventListener("click", function(){
+      document.getElementById("confirmOverlay").classList.add("hidden"); box.innerHTML="";
+      if(b.fn) b.fn();
+    });
+    bar.appendChild(el);
+  });
+  document.getElementById("confirmOverlay").classList.remove("hidden");
+  var last = bar.lastChild; if(last) last.focus();
+}
+
+/* ---------------- entry password ---------------- */
+function baseIsOpen(){ return !document.getElementById("mainApp").classList.contains("hidden"); }
+async function hashPw(pw, saltB64){
+  var enc = new TextEncoder();
+  var km = await crypto.subtle.importKey("raw", enc.encode(pw), "PBKDF2", false, ["deriveBits"]);
+  var bits = await crypto.subtle.deriveBits({name:"PBKDF2", salt: base64ToBytes(saltB64), iterations: 150000, hash:"SHA-256"}, km, 256);
+  return bytesToBase64(new Uint8Array(bits));
+}
+async function setLockUI(){
+  if(!cloudCryptoAvailable()){ toast("Web Crypto недоступен — пароль не поддерживается"); return; }
+  var a = document.getElementById("cfgPw").value, b = document.getElementById("cfgPw2").value;
+  if(a.length < 4){ toast("Пароль — не короче 4 символов"); return; }
+  if(a !== b){ toast("Пароли не совпадают"); return; }
+  var salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+  state.lock = {v:1, salt: salt, hash: await hashPw(a, salt)};
+  state.unlocked = true;
+  markDirty(); closeModal();
+  toast("Пароль установлен — сохраните базу 💾");
+}
+function showLockScreen(){
+  var ls = document.getElementById("lockScreen");
+  ls.classList.remove("hidden");
+  var inp = document.getElementById("lockPw"); inp.value=""; setTimeout(function(){ inp.focus(); }, 50);
+}
+async function tryUnlock(){
+  var inp = document.getElementById("lockPw");
+  try{
+    if(state.lock && await hashPw(inp.value, state.lock.salt) === state.lock.hash){
+      state.unlocked = true;
+      document.getElementById("lockScreen").classList.add("hidden");
+      afterFileLoaded();
+    } else { toast("Неверный пароль"); inp.select(); }
+  }catch(e){ toast("Не удалось проверить пароль"); }
+}
+document.getElementById("lockGo").addEventListener("click", tryUnlock);
+document.getElementById("lockPw").addEventListener("keydown", function(e){ if(e.key==="Enter") tryUnlock(); });
+document.getElementById("lockCancel").addEventListener("click", function(){
+  document.getElementById("lockScreen").classList.add("hidden");
+  resetToWelcome();
+});
+
+/* ---------------- exit ---------------- */
+function resetToWelcome(){
+  state.sections=[]; state.groups=[]; state.tools=[]; state.lock=null; state.unlocked=false;
+  state.fileHandle=null; state.cloudSHA=null; state.dirty=false; state.selected.clear();
+  updateSaveIndicator(); closeModal();
+  document.getElementById("mainApp").classList.add("hidden");
+  document.getElementById("welcomeScreen").classList.remove("hidden");
+}
+function doExit(){
+  state.exiting = true;
+  if(window.ToolkeeperAndroid && ToolkeeperAndroid.exitApp){ try{ ToolkeeperAndroid.exitApp(); return; }catch(e){} }
+  try{ window.close(); }catch(e){}
+  // a regular browser tab may refuse to close: fall back to the start screen
+  setTimeout(function(){ state.exiting=false; resetToWelcome(); }, 300);
+}
+function requestExit(){
+  if(!state.dirty){ doExit(); return; }
+  uiConfirm("Есть несохранённые изменения.", null, {buttons:[
+    {label:"Отмена", cls:"btn-outline"},
+    {label:"Выйти без сохранения", cls:"btn-outline", fn: doExit},
+    {label:"💾 Сохранить и выйти", cls:"btn-primary", fn: async function(){ await saveFile(); if(!state.dirty) doExit(); }}
+  ]});
+}
+document.getElementById("btnExit").addEventListener("click", requestExit);
+/* Android back button: returns "1" when handled here */
+window.__tkBack = function(){
+  if(!document.getElementById("confirmOverlay").classList.contains("hidden")){ document.getElementById("confirmOverlay").classList.add("hidden"); return "1"; }
+  if(!document.getElementById("modalOverlay").classList.contains("hidden")){ closeModal(); return "1"; }
+  if(baseIsOpen() && state.dirty){ requestExit(); return "1"; }
+  return "0";
+};
 
 /* ---------------- derived helpers ---------------- */
 function toolsByGroup(groupId, status){
@@ -3384,7 +3508,7 @@ function renderStockTable(){
   var anyShown = result.anyShown;
 
   // repair pinned section (not part of the sections/groups hierarchy)
-  var repairTitle = "На ремонте";
+  var repairTitle = "Отложено";
   if(titleMatches(repairTitle)){
     anyShown = true;
     var repRows = state.tools.filter(function(t){ return t.status==="repair"; });
@@ -3489,7 +3613,7 @@ function renderSelectionBar(){
   var html = '<b>Выбрано: '+ids.length+'</b>';
   if(uniform==="in_stock"){
     html += '<button class="btn btn-primary" data-action="bulk-issue">Выдать лотом</button>';
-    html += '<button class="btn btn-danger" data-action="bulk-repair">На ремонт</button>';
+    html += '<button class="btn btn-danger" data-action="bulk-repair">Отложить</button>';
   } else if(uniform==="issued"){
     html += '<button class="btn btn-ok" data-action="bulk-return">Вернуть лотом</button>';
   } else if(uniform==="repair"){
@@ -3570,9 +3694,9 @@ function groupOptionsHtml(selectedId){
   }).join("") + '<option value="__new__">+ Новая группа…</option>';
 }
 function openAddToolModal(){
-  var html = '<h3>Добавить инструмент</h3>' +
-    '<div class="field"><label>Название *</label><input id="fName" type="text" placeholder="Дрель Bosch"></div>' +
-    '<div class="field"><label>Характеристика</label><input id="fDesc" type="text" placeholder="Ударная, 750 Вт"></div>' +
+  var html = '<h3>Добавить позицию</h3>' +
+    '<div class="field"><label>Название *</label><input id="fName" type="text" placeholder="Название позиции"></div>' +
+    '<div class="field"><label>Характеристика</label><input id="fDesc" type="text" placeholder="Описание, параметры"></div>' +
     '<div class="field"><label>Примечания</label><input id="fNote" type="text" placeholder="Необязательно"></div>' +
     '<div class="field"><label>Группа</label><select id="fGroup">'+groupOptionsHtml(state.groups[0] && state.groups[0].id)+'</select></div>' +
     '<div class="field hidden" id="fNewGroupWrap"><label>Название новой группы</label><input id="fNewGroup" type="text"></div>' +
@@ -3587,7 +3711,7 @@ function openAddToolModal(){
 }
 function saveNewTool(){
   var name = document.getElementById("fName").value.trim();
-  if(!name){ toast("Укажите название инструмента"); return; }
+  if(!name){ toast("Укажите название"); return; }
   var desc = document.getElementById("fDesc").value.trim();
   var note = document.getElementById("fNote").value.trim();
   var groupSel = document.getElementById("fGroup").value;
@@ -3606,12 +3730,12 @@ function saveNewTool(){
   markDirty();
   closeModal();
   renderAll();
-  toast("Инструмент добавлен");
+  toast("Позиция добавлена");
 }
 function openEditToolModal(id){
   var t = state.tools.find(function(x){ return x.id===id; });
   if(!t) return;
-  var html = '<h3>Редактировать инструмент</h3>' +
+  var html = '<h3>Редактировать позицию</h3>' +
     '<div class="field"><label>Название *</label><input id="fName" type="text" value="'+escapeHtml(t.name)+'"></div>' +
     '<div class="field"><label>Характеристика</label><input id="fDesc" type="text" value="'+escapeHtml(t.desc)+'"></div>' +
     '<div class="field"><label>Примечания</label><input id="fNote" type="text" value="'+escapeHtml(t.note)+'"></div>' +
@@ -3630,7 +3754,7 @@ function saveEditTool(id){
   var t = state.tools.find(function(x){ return x.id===id; });
   if(!t) return;
   var name = document.getElementById("fName").value.trim();
-  if(!name){ toast("Укажите название инструмента"); return; }
+  if(!name){ toast("Укажите название"); return; }
   t.name = name;
   t.desc = document.getElementById("fDesc").value.trim();
   t.note = document.getElementById("fNote").value.trim();
@@ -3652,21 +3776,22 @@ function saveEditTool(id){
 function deleteTool(id){
   var t = state.tools.find(function(x){ return x.id===id; });
   if(!t) return;
-  if(!confirm('Удалить инструмент «'+t.name+'»? Это действие нельзя отменить.')) return;
-  state.tools = state.tools.filter(function(x){ return x.id!==id; });
-  state.selected.delete(id);
-  markDirty();
-  renderAll();
-  toast("Инструмент удалён");
+  uiConfirm('Удалить «'+t.name+'»? Это действие нельзя отменить.', function(){
+    state.tools = state.tools.filter(function(x){ return x.id!==id; });
+    state.selected.delete(id);
+    markDirty();
+    renderAll();
+    toast("Позиция удалена");
+  });
 }
 
 /* ---------------- issue / return ---------------- */
 function openIssueModal(ids){
   var items = state.tools.filter(function(t){ return ids.indexOf(t.id)!==-1; });
   var listHtml = items.map(function(t){ return "<div>• "+escapeHtml(t.name)+"</div>"; }).join("");
-  var html = '<h3>Выдать инструмент'+(items.length>1?" ("+items.length+" шт.)":"")+'</h3>' +
+  var html = '<h3>Выдать'+(items.length>1?" ("+items.length+" шт.)":"")+'</h3>' +
     '<div class="summaryList">'+listHtml+'</div>' +
-    '<div class="field"><label>Кому выдан *</label><input id="fWhom" type="text" placeholder="Иванов И.И."></div>' +
+    '<div class="field"><label>Кому выдано *</label><input id="fWhom" type="text" placeholder="Иванов И.И."></div>' +
     '<div class="field"><label>Дата выдачи</label><input id="fDate" type="date" value="'+todayStr()+'"></div>' +
     '<div class="modalActions">' +
     '<button class="btn btn-outline" data-action="close-modal">Отмена</button>' +
@@ -3676,7 +3801,7 @@ function openIssueModal(ids){
 }
 function confirmIssue(ids){
   var whom = document.getElementById("fWhom").value.trim();
-  if(!whom){ toast("Укажите, кому выдан инструмент"); return; }
+  if(!whom){ toast("Укажите, кому выдано"); return; }
   var date = document.getElementById("fDate").value || todayStr();
   ids.forEach(function(id){
     var t = state.tools.find(function(x){ return x.id===id; });
@@ -3691,7 +3816,7 @@ function confirmIssue(ids){
 function openReturnModal(ids){
   var items = state.tools.filter(function(t){ return ids.indexOf(t.id)!==-1; });
   var listHtml = items.map(function(t){ return "<div>• "+escapeHtml(t.name)+" ("+escapeHtml(t.issued_to)+")</div>"; }).join("");
-  var html = '<h3>Вернуть инструмент'+(items.length>1?" ("+items.length+" шт.)":"")+'</h3>' +
+  var html = '<h3>Вернуть'+(items.length>1?" ("+items.length+" шт.)":"")+'</h3>' +
     '<div class="summaryList">'+listHtml+'</div>' +
     '<div class="field"><label>Дата возврата</label><input id="fDate" type="date" value="'+todayStr()+'"></div>' +
     '<div class="modalActions">' +
@@ -3713,14 +3838,15 @@ function confirmReturn(ids){
   toast("Возврат оформлен");
 }
 function bulkRepair(ids){
-  if(!confirm("Отправить на ремонт: "+ids.length+" шт.?")) return;
-  ids.forEach(function(id){
-    var t = state.tools.find(function(x){ return x.id===id; });
-    if(t) t.status="repair";
-    state.selected.delete(id);
+  uiConfirm("Отложить: "+ids.length+" шт.?", function(){
+    ids.forEach(function(id){
+      var t = state.tools.find(function(x){ return x.id===id; });
+      if(t) t.status="repair";
+      state.selected.delete(id);
+    });
+    markDirty(); renderAll();
+    toast("Отложено");
   });
-  markDirty(); renderAll();
-  toast("Отправлено на ремонт");
 }
 function unrepairOne(id){
   var t = state.tools.find(function(x){ return x.id===id; });
@@ -3737,7 +3863,7 @@ function bulkUnrepair(ids){
 /* ---------------- QR / copy ---------------- */
 function buildLotText(ids){
   var items = state.tools.filter(function(t){ return ids.indexOf(t.id)!==-1; });
-  var lines = ["Инструменты ("+items.length+" шт.), "+fmtDate(todayStr())];
+  var lines = ["Позиции ("+items.length+" шт.), "+fmtDate(todayStr())];
   items.forEach(function(t, i){
     var line = (i+1)+". "+t.name;
     if(t.desc) line += " — "+t.desc;
@@ -3751,7 +3877,7 @@ function openQRModal(ids){
   var html = '<h3>QR-код лота</h3>' +
     '<div class="qrTag">' +
     '<canvas id="qrCanvas"></canvas>' +
-    '<div class="qrTitle">Инструменты: '+ids.length+' шт.</div>' +
+    '<div class="qrTitle">Позиции: '+ids.length+' шт.</div>' +
     '<div class="qrDate">'+fmtDate(todayStr())+'</div>' +
     '</div>' +
     '<div class="qrText" id="qrTextBlock">'+escapeHtml(text)+'</div>' +
@@ -3783,7 +3909,7 @@ function openQRModal(ids){
     }
     canvas.dataset.ready = "1";
   }catch(err){
-    document.querySelector(".qrTag").innerHTML = '<div style="color:var(--danger); font-size:13px; padding:20px;">Слишком много инструментов для одного QR-кода. Попробуйте выделить меньше строк.</div>';
+    document.querySelector(".qrTag").innerHTML = '<div style="color:var(--danger); font-size:13px; padding:20px;">Слишком много позиций для одного QR-кода. Попробуйте выделить меньше строк.</div>';
   }
 }
 function copyText(text){
@@ -3876,11 +4002,12 @@ function addGroupTo(sectionId){
 function deleteSection(id){
   if(state.sections.length<=1){ toast("Должен остаться хотя бы один раздел"); return; }
   var cnt = state.groups.filter(function(g){ return g.section_id===id; }).length;
-  if(!confirm("Удалить раздел? "+(cnt>0?("Группы ("+cnt+") переедут в первый оставшийся раздел."):""))) return;
-  state.sections = state.sections.filter(function(s){ return s.id!==id; });
-  var fallbackId = state.sections[0].id;
-  state.groups.forEach(function(g){ if(g.section_id===id) g.section_id = fallbackId; });
-  markDirty(); renderAll(); renderGroupsModalBody();
+  uiConfirm("Удалить раздел? "+(cnt>0?("Группы ("+cnt+") переедут в первый оставшийся раздел."):""), function(){
+    state.sections = state.sections.filter(function(s){ return s.id!==id; });
+    var fallbackId = state.sections[0].id;
+    state.groups.forEach(function(g){ if(g.section_id===id) g.section_id = fallbackId; });
+    markDirty(); renderAll(); renderGroupsModalBody();
+  });
 }
 function addGroup(){
   var name = document.getElementById("fNewGroupName").value.trim();
@@ -3891,12 +4018,13 @@ function addGroup(){
 function deleteGroup(id){
   if(state.groups.length<=1){ toast("Должна остаться хотя бы одна группа"); return; }
   var cnt = state.tools.filter(function(t){ return t.group_id===id; }).length;
-  if(!confirm("Удалить группу? "+(cnt>0?("Инструменты ("+cnt+" шт.) переедут в первую оставшуюся группу."):""))) return;
-  var g = state.groups.find(function(x){ return x.id===id; });
-  state.groups = state.groups.filter(function(x){ return x.id!==id; });
-  var fallback = state.groups.find(function(x){ return x.section_id===(g?g.section_id:null); }) || state.groups[0];
-  state.tools.forEach(function(t){ if(t.group_id===id) t.group_id = fallback.id; });
-  markDirty(); renderAll(); renderGroupsModalBody();
+  uiConfirm("Удалить группу? "+(cnt>0?("Позиции ("+cnt+" шт.) переедут в первую оставшуюся группу."):""), function(){
+    var g = state.groups.find(function(x){ return x.id===id; });
+    state.groups = state.groups.filter(function(x){ return x.id!==id; });
+    var fallback = state.groups.find(function(x){ return x.section_id===(g?g.section_id:null); }) || state.groups[0];
+    state.tools.forEach(function(t){ if(t.group_id===id) t.group_id = fallback.id; });
+    markDirty(); renderAll(); renderGroupsModalBody();
+  });
 }
 
 /* ---------------- colors ---------------- */
@@ -4203,12 +4331,20 @@ document.addEventListener("click", function(e){
       break;
     }
     case "save-cloud-cfg": saveCloudSettingsUI(); break;
+    case "set-lock": setLockUI(); break;
+    case "set-mode": if(!el.disabled){ setMode(el.getAttribute("data-mode")); document.querySelectorAll('#modalBox [data-action="set-mode"]').forEach(function(b){ b.classList.toggle("active", b===el); }); } break;
+    case "new-db": {
+      var mk = function(){ closeModal(); newDatabase(); };
+      if(baseIsOpen() && state.dirty) uiConfirm("Есть несохранённые изменения. Всё равно создать новую базу?", mk); else uiConfirm("Создать новую пустую базу?", mk);
+      break;
+    }
+    case "remove-lock": uiConfirm("Убрать пароль входа? После сохранения базу можно будет открыть без пароля.", function(){ state.lock=null; markDirty(); closeModal(); toast("Пароль убран — сохраните базу"); }); break;
     case "clear-cloud-cfg": {
-      if(confirm("Удалить репозиторий, токен и ключ с этого устройства?")){
+      uiConfirm("Удалить репозиторий, токен и ключ с этого устройства?", function(){
         CLOUD_CONFIG.repo=""; CLOUD_CONFIG.token=""; CLOUD_CONFIG.aesKeyBase64=""; CLOUD_CONFIG.branch="main"; CLOUD_CONFIG.filePath="data.json.enc";
         try{ localStorage.removeItem(CLOUD_KEY); }catch(e){}
         closeModal(); toast("Настройки облака удалены");
-      }
+      });
       break;
     }
     case "qr-copy-text": copyText(document.getElementById("qrTextBlock").textContent); break;
@@ -4274,7 +4410,6 @@ document.getElementById("btnCloudSettings").addEventListener("click", openCloudI
 
 /* topbar / tabbar wiring */
 document.getElementById("btnOpenWelcome").addEventListener("click", openFile);
-document.getElementById("btnNewWelcome").addEventListener("click", newDatabase);
 document.getElementById("btnOpen").addEventListener("click", openFile);
 document.getElementById("btnSave").addEventListener("click", saveFile);
 document.getElementById("btnAdd").addEventListener("click", openAddToolModal);
@@ -4287,20 +4422,24 @@ document.getElementById("tabStock").addEventListener("click", function(){ state.
 document.getElementById("tabIssued").addEventListener("click", function(){ state.mobileView="issued"; applyMobileView(); });
 
 /* storage mode toggle (welcome screen) */
-(function initStorageToggle(){
-  var cloudBtn = document.querySelector('.stOption[data-mode="cloud"]');
-  if(!cloudCryptoAvailable() && cloudBtn){
-    cloudBtn.disabled = true;
-    cloudBtn.title = "Требуется Chrome/Edge или HTTPS (Web Crypto недоступен)";
-  }
-  document.querySelectorAll(".stOption").forEach(function(btn){
-    btn.addEventListener("click", function(){
-      if(btn.disabled) return;
-      state.storageMode = btn.getAttribute("data-mode");
-      document.querySelectorAll(".stOption").forEach(function(b){ b.classList.toggle("active", b===btn); });
-      document.getElementById("cloudWarn").classList.toggle("hidden", state.storageMode!=="cloud");
-    });
-  });
+var MODE_KEY = "toolkeeper13_last_mode";
+function setMode(m){
+  if(m==="cloud" && !cloudCryptoAvailable()) m="local";
+  state.storageMode = m;
+  if(m==="cloud") state.cloudSHA = state.cloudSHA || null;
+  rememberMode(); updateStorageBadge(); updateWelcomeMode();
+}
+function rememberMode(){ try{ localStorage.setItem(MODE_KEY, state.storageMode); }catch(e){} }
+function updateWelcomeMode(){
+  var cloud = state.storageMode==="cloud";
+  document.getElementById("btnOpenWelcome").textContent = cloud ? "☁️ Открыть онлайн-базу" : "📂 Открыть базу (data.json)";
+  document.getElementById("modeHint").textContent = cloud ? "Режим: онлайн. Сменить или создать новую базу — в ⚙️ Настройках." : "Режим: локально. Сменить или создать новую базу — в ⚙️ Настройках.";
+}
+(function initStorageMode(){
+  var m = "local"; try{ m = localStorage.getItem(MODE_KEY) || "local"; }catch(e){}
+  if(m==="cloud" && !cloudCryptoAvailable()) m="local";
+  state.storageMode = m;
+  updateWelcomeMode();
   document.getElementById("cloudSettingsBtn").addEventListener("click", openCloudInfoModal);
 })();
 
@@ -4314,7 +4453,7 @@ document.getElementById("tabIssued").addEventListener("click", function(){ state
     document.getElementById("draftBanner").classList.remove("hidden");
     document.getElementById("draftTime").textContent = new Date(draft.ts).toLocaleString("ru-RU");
     document.getElementById("btnRestoreDraft").addEventListener("click", function(){
-      loadDataFromObject({sections: draft.sections, groups: draft.groups, tools: draft.tools});
+      loadDataFromObject({sections: draft.sections, groups: draft.groups, tools: draft.tools, lock: draft.lock});
       state.fileHandle = null;
       state.fileMode = ("showSaveFilePicker" in window) ? "fsapi-new" : "fallback";
       state.dirty = true;
