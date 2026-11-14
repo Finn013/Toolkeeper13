@@ -3229,14 +3229,13 @@ function openCloudInfoModal(){
     '<button type="button" class="stOption'+(state.storageMode==="cloud"?" active":"")+'" data-action="set-mode" data-mode="cloud"'+(cloudCryptoAvailable()?'':' disabled')+'>☁️ Онлайн (GitHub)</button></div>' +
     (open?'<p style="font-size:12px;color:var(--ink-muted);margin:4px 0 0;">Смена режима меняет, куда сохраняет 💾. Данные на экране остаются.</p>':'') + '</div>' +
     '<div class="modalActions" style="justify-content:flex-start;"><button class="btn btn-sm btn-outline" data-action="new-db">✚ Создать новую базу</button></div>' +
+    '<div class="field" style="margin-top:10px;"><label>⬇️ Обновление программы</label><p style="font-size:12px;color:var(--ink-muted);margin:2px 0 6px;">Версия '+APP_VER+'. Проверка раз в сутки при запуске.</p><button class="btn btn-sm btn-outline" type="button" data-action="check-update">🔄 Проверить обновления</button></div>' +
     '<hr style="border:none;border-top:1px solid var(--line,#ddd);margin:14px 0 10px;">' +
     '<h4 style="margin:0 0 8px;">☁️ Облако (GitHub)</h4>' +
     '<p style="font-size:12px;color:var(--warn);margin:0 0 8px;">⚠️ Токен и ключ хранятся только на этом устройстве. Репозиторий для данных делайте приватным.</p>' +
     '<p style="font-size:12.5px;color:var(--ink-muted);margin-top:0;">Данные шифруются AES-256 и хранятся файлом в вашем репозитории. Настройки сохраняются только на этом устройстве. Ключ AES должен быть одинаковым на всех устройствах — сохраните его в надёжном месте.</p>' +
-    '<div class="field"><label>Репозиторий (логин/имя)</label><input type="text" id="cfgRepo" placeholder="login/my-data" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(c.repo)+'"></div>' +
-    '<div class="field"><label>Ветка</label><input type="text" id="cfgBranch" autocomplete="off" autocapitalize="off" value="'+escapeHtml(c.branch)+'"></div>' +
-    '<div class="field"><label>Файл в репозитории</label><input type="text" id="cfgPath" autocomplete="off" autocapitalize="off" value="'+escapeHtml(c.filePath)+'"></div>' +
-    '<div class="field"><label>Токен GitHub (Contents: Read and write)</label><input type="password" id="cfgToken" autocomplete="off" placeholder="'+(c.token?"сохранён — оставьте пустым, чтобы не менять":"github_pat_…")+'"></div>' +
+    '<div class="field"><label>Строка подключения</label><input type="text" id="cfgConn" placeholder="логин/репозиторий;data.json.enc;github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(connLine(c))+'">' +
+    '<p style="font-size:12px;color:var(--ink-muted);margin:4px 0 0;">Формат: <b>репозиторий;файл;токен</b>. Ветка не main — допишите к репозиторию через @ (логин/имя@ветка). Токен (Contents: Read and write) '+(c.token?'сохранён — третью часть можно не вписывать.':'обязателен.')+'</p></div>' +
     '<div class="field"><label>Ключ AES-256 (base64)</label><textarea id="cfgKey" style="height:60px;" autocomplete="off" spellcheck="false">'+escapeHtml(c.aesKeyBase64)+'</textarea></div>' +
     '<div class="modalActions"><button class="btn btn-sm btn-outline" data-action="gen-aes-key">🔑 Новый ключ</button><button class="btn btn-sm btn-outline" data-action="copy-aes-key">📋 Копировать ключ</button><button class="btn btn-sm btn-ghost" data-action="clear-cloud-cfg">Очистить</button></div>' +
     '<div class="modalActions"><button class="btn btn-outline" data-action="close-modal">Отмена</button><button class="btn btn-primary" data-action="save-cloud-cfg">Сохранить</button></div>' +
@@ -3257,15 +3256,21 @@ function generateAesKeyUI(){
   };
   if(el.value.trim()) uiConfirm("Заменить текущий ключ? Данные, зашифрованные старым ключом, нельзя будет открыть.", doGen); else doGen();
 }
+function connLine(c){
+  if(!c.repo) return "";
+  return c.repo+(c.branch&&c.branch!=="main"?"@"+c.branch:"")+";"+(c.filePath||"data.json.enc")+";";
+}
 function saveCloudSettingsUI(){
-  var repo=document.getElementById("cfgRepo").value.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/\/+$/,"");
+  var parts=document.getElementById("cfgConn").value.split(";").map(function(x){return x.trim();});
+  var rb=(parts[0]||"").replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"").replace(/\/+$/,"");
+  var br=""; var at=rb.indexOf("@"); if(at>0){ br=rb.slice(at+1).trim(); rb=rb.slice(0,at).trim(); }
+  var repo=rb, filePath=parts[1]||"", tok=parts.slice(2).join(";");
   var key=document.getElementById("cfgKey").value.replace(/\s+/g,"");
-  var tok=document.getElementById("cfgToken").value.trim();
-  if(repo && !/^[^\/\s]+\/[^\/\s]+$/.test(repo)){ toast("Репозиторий в виде логин/имя"); return; }
+  if(repo && !/^[^\/\s]+\/[^\/\s]+$/.test(repo)){ toast("Строка: логин/репозиторий;файл;токен"); return; }
   if(key){ try{ if(base64ToBytes(key).length!==32){ toast("Ключ должен быть 32 байта в base64"); return; } }catch(e){ toast("Ключ не похож на base64"); return; } }
   CLOUD_CONFIG.repo=repo;
-  CLOUD_CONFIG.branch=document.getElementById("cfgBranch").value.trim()||"main";
-  CLOUD_CONFIG.filePath=document.getElementById("cfgPath").value.trim()||"data.json.enc";
+  CLOUD_CONFIG.branch=br||"main";
+  CLOUD_CONFIG.filePath=filePath||"data.json.enc";
   if(tok) CLOUD_CONFIG.token=tok;
   CLOUD_CONFIG.aesKeyBase64=key;
   state.cloudSHA=null;
@@ -3277,6 +3282,35 @@ window.addEventListener("beforeunload", function(e){
     e.preventDefault(); e.returnValue="";
     if(/Electron/i.test(navigator.userAgent)) setTimeout(requestExit, 0);
   }
+});
+
+/* ---------------- автообновление (APK; Windows/Linux — в main.js) ---------------- */
+var APP_VER = '1.0.5';
+var UPD_URL = 'https://finn013.github.io/Toolkeeper13/version.json';
+var REL_URL = 'https://github.com/Finn013/Toolkeeper13/releases/latest';
+function apkCode(){ try{ return window.ToolkeeperAndroid && ToolkeeperAndroid.versionCode ? +ToolkeeperAndroid.versionCode() : 0; }catch(e){ return 0; } }
+function verCmp(a,b){ var x=String(a).split('.'), y=String(b).split('.'); for(var i=0;i<Math.max(x.length,y.length);i++){ var d=(parseInt(x[i],10)||0)-(parseInt(y[i],10)||0); if(d) return d<0?-1:1; } return 0; }
+function checkAppUpdate(manual){
+  fetch(UPD_URL+'?t='+Date.now(), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(info){
+    try{ localStorage.setItem('toolkeeper13_upd_last', String(Date.now())); }catch(e){}
+    var code=apkCode(), newer = code ? (+info.apkCode > code) : (verCmp(info.version, APP_VER) > 0);
+    if(!newer){ if(manual) toast('У вас последняя версия '+APP_VER); return; }
+    if(!manual && localStorage.getItem('toolkeeper13_upd_skip')===String(info.version)) return;
+    var apk=!!code;
+    uiConfirm('Доступна Toolkeeper 13 '+info.version+' (у вас '+APP_VER+').'+(info.notes?'\n\n'+info.notes:'')+'\n\nДанные не затрагиваются. Перед обновлением сохраните базу.', null, {buttons:[
+      {label:'Пропустить версию', cls:'btn-ghost', fn:function(){ try{ localStorage.setItem('toolkeeper13_upd_skip', String(info.version)); }catch(e){} }},
+      {label:'Позже', cls:'btn-outline'},
+      {label: apk?'⬇️ Обновить':'⬇️ Скачать', cls:'btn-primary', fn:function(){
+        if(apk){ try{ ToolkeeperAndroid.installUpdate(info.apk || (REL_URL+'/download/Toolkeeper13.apk')); toast('Скачиваю обновление…'); }catch(e){ toast('Ошибка: '+e.message); } }
+        else { var a=document.createElement('a'); a.href=REL_URL; a.target='_blank'; a.rel='noopener noreferrer'; document.body.appendChild(a); a.click(); a.remove(); }
+      }}
+    ]});
+  }).catch(function(){ if(manual) toast('Не удалось проверить обновления (нет сети?)'); });
+}
+window.__tkUpd = function(msg){ toast(msg, 4000); };
+window.addEventListener('load', function(){
+  var last=0; try{ last=+localStorage.getItem('toolkeeper13_upd_last')||0; }catch(e){}
+  if(Date.now()-last > 20*3600e3 && !/Electron/.test(navigator.userAgent) && (apkCode() || location.protocol==='file:')) setTimeout(function(){ checkAppUpdate(false); }, 4000);
 });
 
 /* ---------------- in-app confirm (native confirm() breaks text input in Electron) ---------------- */
@@ -4334,6 +4368,7 @@ document.addEventListener("click", function(e){
       break;
     }
     case "remove-lock": uiConfirm("Убрать пароль входа? После сохранения базу можно будет открыть без пароля.", function(){ state.lock=null; markDirty(); closeModal(); toast("Пароль убран — сохраните базу"); }); break;
+    case "check-update": checkAppUpdate(true); break;
     case "clear-cloud-cfg": {
       uiConfirm("Удалить репозиторий, токен и ключ с этого устройства?", function(){
         CLOUD_CONFIG.repo=""; CLOUD_CONFIG.token=""; CLOUD_CONFIG.aesKeyBase64=""; CLOUD_CONFIG.branch="main"; CLOUD_CONFIG.filePath="data.json.enc";
